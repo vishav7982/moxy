@@ -81,6 +81,15 @@ func (e *Expectation) WithQueryParam(key, value string) *Expectation {
 	return e
 }
 
+// WithQueryParamMatching adds a regex query parameter matcher.
+func (e *Expectation) WithQueryParamMatching(key, pattern string) *Expectation {
+	if e.Request.QueryParamMatchers == nil {
+		e.Request.QueryParamMatchers = make(map[string]ValueMatcher)
+	}
+	e.Request.QueryParamMatchers[key] = ValueMatcher{Matches: pattern}
+	return e
+}
+
 // WithQueryParams adds multiple query parameter matchers at once.
 // Example: .WithQueryParams(map[string]string{"id": "123", "type": "user"})
 func (e *Expectation) WithQueryParams(params map[string]string) *Expectation {
@@ -104,6 +113,15 @@ func (e *Expectation) WithHeader(key, value string) *Expectation {
 	return e
 }
 
+// WithHeaderMatching adds a regex header matcher.
+func (e *Expectation) WithHeaderMatching(key, pattern string) *Expectation {
+	if e.Request.HeaderMatchers == nil {
+		e.Request.HeaderMatchers = make(map[string]ValueMatcher)
+	}
+	e.Request.HeaderMatchers[strings.ToLower(key)] = ValueMatcher{Matches: pattern}
+	return e
+}
+
 // WithHeaders adds multiple header matchers at once.
 // Keys are normalized to lowercase for case-insensitive matching.
 // Example: .WithHeaders(map[string]string{"Content-Type": "application/json", "X-API-Key": "secret"})
@@ -114,6 +132,31 @@ func (e *Expectation) WithHeaders(headers map[string]string) *Expectation {
 	for k, v := range headers {
 		e.Request.Headers[strings.ToLower(k)] = v
 	}
+	return e
+}
+
+// WithCookie adds an exact cookie matcher.
+func (e *Expectation) WithCookie(key, value string) *Expectation {
+	if e.Request.Cookies == nil {
+		e.Request.Cookies = make(map[string]ValueMatcher)
+	}
+	e.Request.Cookies[key] = ValueMatcher{EqualTo: value}
+	return e
+}
+
+// WithCookieMatching adds a regex cookie matcher.
+func (e *Expectation) WithCookieMatching(key, pattern string) *Expectation {
+	if e.Request.Cookies == nil {
+		e.Request.Cookies = make(map[string]ValueMatcher)
+	}
+	e.Request.Cookies[key] = ValueMatcher{Matches: pattern}
+	return e
+}
+
+// WithBasicAuth matches requests with HTTP Basic Authentication.
+func (e *Expectation) WithBasicAuth(username, password string) *Expectation {
+	e.Request.BasicAuthUsername = username
+	e.Request.BasicAuthPassword = password
 	return e
 }
 
@@ -183,6 +226,16 @@ func (e *Expectation) WithRequestPartialJSONBody(expected string) *Expectation {
 	return e
 }
 
+// WithRequestJSONField matches a JSON body field by simple dot path.
+// Example: .WithRequestJSONField("user.id", float64(42))
+func (e *Expectation) WithRequestJSONField(path string, expected interface{}) *Expectation {
+	if e.Request.JSONFields == nil {
+		e.Request.JSONFields = make(map[string]interface{})
+	}
+	e.Request.JSONFields[path] = expected
+	return e
+}
+
 // WithRequestBodyContains sets a matcher that checks if the request body contains the given substring.
 // Example: .WithRequestBodyContains("test")
 func (e *Expectation) WithRequestBodyContains(substring string) *Expectation {
@@ -203,6 +256,12 @@ func (e *Expectation) WithCustomBodyMatcher(matcher func([]byte) bool) *Expectat
 // Times sets how many times this expectation should be called.
 func (e *Expectation) Times(count int) *Expectation {
 	e.MaxCalls = &count
+	return e
+}
+
+// WithPriority sets matching priority. Lower numbers match first. Zero uses the default priority.
+func (e *Expectation) WithPriority(priority int) *Expectation {
+	e.Priority = priority
 	return e
 }
 
@@ -263,6 +322,24 @@ func (e *Expectation) AndRespondWithString(body string, statusCode int) *Expecta
 	return e.AndRespondWith([]byte(body), statusCode)
 }
 
+// AndRespondWithTemplate sets a Go text/template response body for the current response.
+func (e *Expectation) AndRespondWithTemplate(bodyTemplate string, statusCode int) *Expectation {
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	resp := e.getCurrentResponse()
+	resp.BodyTemplate = bodyTemplate
+	resp.StatusCode = statusCode
+	return e
+}
+
+// AndRespondWithFunc sets a custom response function for library users.
+func (e *Expectation) AndRespondWithFunc(responder func(http.ResponseWriter, *http.Request, []byte)) *Expectation {
+	resp := e.getCurrentResponse()
+	resp.Responder = responder
+	return e
+}
+
 // AndRespondFromFile sets the response body from a file and status code for the current response.
 func (e *Expectation) AndRespondFromFile(filePath string, statusCode int) *Expectation {
 	data, err := os.ReadFile(filePath)
@@ -282,6 +359,16 @@ func (e *Expectation) WithResponseHeader(key, value string) *Expectation {
 		resp.Headers = make(map[string]string)
 	}
 	resp.Headers[key] = value
+	return e
+}
+
+// WithResponseHeaderTemplate sets a Go text/template response header.
+func (e *Expectation) WithResponseHeaderTemplate(key, valueTemplate string) *Expectation {
+	resp := e.getCurrentResponse()
+	if resp.HeaderTemplates == nil {
+		resp.HeaderTemplates = make(map[string]string)
+	}
+	resp.HeaderTemplates[key] = valueTemplate
 	return e
 }
 
@@ -347,6 +434,11 @@ func (e *Expectation) matches(r *http.Request, body []byte) bool {
 			}
 		}
 	}
+	for paramKey, matcher := range e.Request.QueryParamMatchers {
+		if !valueMatches(r.URL.Query().Get(paramKey), matcher) {
+			return false
+		}
+	}
 	// --- Header Matching ---
 	for headerKey, expectedValue := range e.Request.Headers {
 		actualHeaderValue := r.Header.Get(headerKey)
@@ -354,10 +446,32 @@ func (e *Expectation) matches(r *http.Request, body []byte) bool {
 			return false
 		}
 	}
+	for headerKey, matcher := range e.Request.HeaderMatchers {
+		if !valueMatches(r.Header.Get(headerKey), matcher) {
+			return false
+		}
+	}
+	for cookieName, matcher := range e.Request.Cookies {
+		cookie, err := r.Cookie(cookieName)
+		if err != nil || !valueMatches(cookie.Value, matcher) {
+			return false
+		}
+	}
+	if e.Request.BasicAuthUsername != "" || e.Request.BasicAuthPassword != "" {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != e.Request.BasicAuthUsername || password != e.Request.BasicAuthPassword {
+			return false
+		}
+	}
 	// --- Body Matching ---
 	if e.Request.BodyMatcher != nil {
-		return e.Request.BodyMatcher(body)
+		if !e.Request.BodyMatcher(body) {
+			return false
+		}
 	} else if len(e.Request.Body) > 0 && !reflect.DeepEqual(body, e.Request.Body) {
+		return false
+	}
+	if len(e.Request.JSONFields) > 0 && !jsonFieldsMatch(body, e.Request.JSONFields) {
 		return false
 	}
 	return true
@@ -398,6 +512,43 @@ func containsAll(actual, expected map[string]interface{}) bool {
 		}
 	}
 	return true
+}
+
+func valueMatches(actual string, matcher ValueMatcher) bool {
+	if matcher.Matches != "" {
+		matched, err := regexp.MatchString(matcher.Matches, actual)
+		return err == nil && matched
+	}
+	return actual == matcher.EqualTo
+}
+
+func jsonFieldsMatch(body []byte, expected map[string]interface{}) bool {
+	var actual interface{}
+	if err := json.Unmarshal(body, &actual); err != nil {
+		return false
+	}
+	for path, expectedValue := range expected {
+		actualValue, ok := valueAtDotPath(actual, path)
+		if !ok || !reflect.DeepEqual(actualValue, expectedValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func valueAtDotPath(value interface{}, path string) (interface{}, bool) {
+	current := value
+	for _, part := range strings.Split(path, ".") {
+		object, ok := current.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 // AssertCalled checks if the expectation was called exactly `expected` times.

@@ -11,10 +11,13 @@ Stop fighting with Docker containers, flaky network calls, and manual certificat
 
 ## Features
 - Flexible request matching: HTTP method, path, headers, query params, and body.
-- Support for path variables and regular expressions.
-- Multiple response types: string, file, or custom function.
+- Support for path variables, regular expressions, cookies, basic auth, and simple JSON field matching.
+- Multiple response types: string, file, Go template, or custom function.
 - Sequential responses for repeated calls.
 - Simulate delays or timeouts.
+- Standalone `moxy` binary with JSON mapping files.
+- Runtime admin API under `/__moxy`.
+- Request journal for matched and unmatched requests.
 - MaxCalls enforcement and unmatched request tracking.
 - Thread-safe with call count tracking.
 - Middleware support and verbose logging.
@@ -26,6 +29,12 @@ Stop fighting with Docker containers, flaky network calls, and manual certificat
 
 ```bash
 go get github.com/vishav7982/moxy
+```
+
+Install the standalone binary:
+
+```bash
+go install github.com/vishav7982/moxy/cmd/moxy@latest
 ```
 
 ## Quick Start
@@ -44,6 +53,41 @@ body, _ := io.ReadAll(resp.Body)
 
 fmt.Println(string(body)) // {"message":"pong"}
 ```
+
+## Standalone Usage
+
+Run `moxy` as a local mock server and load JSON mappings from a directory:
+
+```bash
+moxy --host 127.0.0.1 --port 8080 --mappings ./mappings --verbose
+```
+
+Example mapping:
+
+```json
+{
+  "name": "get-user",
+  "request": {
+    "method": "GET",
+    "path": "/users/{id}"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "bodyTemplate": "{\"id\":\"{{index .PathVariables \"id\"}}\"}"
+  }
+}
+```
+
+Runtime admin endpoints are available under `/__moxy`:
+
+- `GET /__moxy/health`
+- `GET|POST|DELETE /__moxy/mappings`
+- `GET|DELETE /__moxy/requests`
+- `POST /__moxy/reset`
+
 📖 For more extensive usage examples — including https, mTLS, headers, query parameters, sequential responses, response delays, simulated server timeouts, custom responders, unmatched request handling etc. — see [mock_server_test.go](./mock_server_test.go).
 ## Why Use It ?
 Modern Go projects need reliable integration tests — but setting up real HTTP(S) servers, TLS, and mTLS is painful and slow. This library solves that by giving you an in-memory, production-like HTTP/HTTPS server that is:
@@ -60,6 +104,7 @@ No need to spin up Docker containers or mock services manually. No network flaki
 
 Define request matchers with method, path, headers, query params, and body content. Supports multiple expectations for different endpoints.
 Supports sequential responses for the same request (great for retry and polling tests).
+Supports richer matching for cookies, basic auth, regex values, and JSON fields.
 
 **✅ 4. Customizable Client & TLS Behavior**
 
@@ -72,6 +117,7 @@ Designed for parallel tests — no global state, no race conditions. Thread-safe
 **✅ 6. Clear Failure Reporting**
 
 When expectations don’t match, you get detailed logs showing the unexpected request and which expectation failed. Makes debugging test failures much faster.
+You can also inspect the request journal to see matched and unmatched requests.
 
 **✅ 7. Minimal Boilerplate**
 

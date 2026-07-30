@@ -100,7 +100,7 @@ ms.AddExpectation(exp)
 // Inject mock server's trusted client into GetUser
 client := ms.Client()
 
-got, err := GetUser(ms.DefaultClient(), ms.URL(), 42)
+got, err := GetUser(client, ms.URL(), 42)
 if err != nil {
 t.Fatalf("HTTPS call failed: %v", err)
 }
@@ -172,7 +172,7 @@ serverCrtFilePath := filepath.Join("testdata", "server.crt")
         AndRespondWithString(`{"id":42,"name":"Alice"}`, 200)
 	)
 	// Make request
-	resp, err := GetUser(ms.mTLSClient([]tls.Certificate{clientCert}, serverCertPool), ms.URL(), 42)
+	resp, err := GetUser(ms.MTLSClient([]tls.Certificate{clientCert}, serverCertPool), ms.URL(), 42)
     if err != nil {
      t.Fatalf("HTTPS call failed: %v", err)
     }
@@ -200,6 +200,28 @@ You can always check:
         t.Logf("Received %s %s", req.Method, req.Path)
      }
     ```
+
+**Standalone binary with JSON mappings**
+
+```bash
+moxy --host 127.0.0.1 --port 8080 --mappings ./mappings
+```
+
+Example `mappings/user.json`:
+
+```json
+{
+  "request": {
+    "method": "GET",
+    "path": "/users/{id}"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "bodyTemplate": "{\"id\":\"{{index .PathVariables \"id\"}}\"}"
+  }
+}
+```
   
 This ensures your code made the right number of HTTP calls with the right data.
 
